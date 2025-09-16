@@ -1,19 +1,76 @@
 // src/components/TeacherFeedbackSummary.jsx
 import React, { useState, useEffect } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, Link } from 'react-router-dom';
 import axios from 'axios';
+import { socketUtils } from '../utils/socket';
 
 function TeacherFeedbackSummary() {
     const { classId } = useParams();
     const [summary, setSummary] = useState(null);
     const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState('');
+    const [connectedUsers, setConnectedUsers] = useState({ studentCount: 0, teacherCount: 0 });
+    const [recentActivity, setRecentActivity] = useState([]);
 
     useEffect(() => {
         const fetchSummary = async () => {
             try {
                 const response = await axios.get(`http://localhost:3001/api/feedback/${classId}/summary`);
                 setSummary(response.data);
+                
+                // Connect to socket for real-time updates
+                socketUtils.connect();
+                socketUtils.joinClass(classId, 'teacher');
+                
+                // Set up real-time event listeners
+                socketUtils.onUserCountUpdate(setConnectedUsers);
+                
+                socketUtils.onRatingUpdate((data) => {
+                    // Update specific topic in summary
+                    setSummary(prevSummary => {
+                        if (!prevSummary) return prevSummary;
+                        
+                        const updatedTopics = prevSummary.topics.map(topic => 
+                            topic.id === data.topicId 
+                                ? { ...topic, averageRating: data.averageRating, ratingCount: data.totalResponses }
+                                : topic
+                        );
+                        
+                        return { ...prevSummary, topics: updatedTopics };
+                    });
+                    
+                    addRecentActivity(`📊 New rating: ${data.newRating}/10 for topic ID ${data.topicId}`);
+                });
+                
+                socketUtils.onLiveRatingUpdate((data) => {
+                    // Update specific topic in summary for live ratings
+                    setSummary(prevSummary => {
+                        if (!prevSummary) return prevSummary;
+                        
+                        const updatedTopics = prevSummary.topics.map(topic => 
+                            topic.id === data.topicId 
+                                ? { ...topic, averageRating: data.averageRating, ratingCount: data.totalResponses }
+                                : topic
+                        );
+                        
+                        return { ...prevSummary, topics: updatedTopics };
+                    });
+                    
+                    addRecentActivity(`⚡ Live rating: ${data.rating}/10 (Avg: ${data.averageRating})`);
+                });
+                
+                socketUtils.onNewComment((comment) => {
+                    setSummary(prevSummary => {
+                        if (!prevSummary) return prevSummary;
+                        return {
+                            ...prevSummary,
+                            generalComments: [...prevSummary.generalComments, comment]
+                        };
+                    });
+                    
+                    addRecentActivity(`💬 New comment received`);
+                });
+                
             } catch (err) {
                 setError('Failed to fetch feedback summary.');
                 console.error(err);
@@ -22,7 +79,25 @@ function TeacherFeedbackSummary() {
             }
         };
         fetchSummary();
+
+        return () => {
+            socketUtils.offUserCountUpdate();
+            socketUtils.offRatingUpdate();
+            socketUtils.offLiveRatingUpdate();
+            socketUtils.offNewComment();
+            socketUtils.disconnect();
+        };
     }, [classId]);
+
+    const addRecentActivity = (message) => {
+        const activity = {
+            message,
+            timestamp: new Date(),
+            id: Date.now() + Math.random()
+        };
+        
+        setRecentActivity(prev => [activity, ...prev.slice(0, 9)]); // Keep last 10 activities
+    };
 
     const getRatingColor = (rating) => {
         if (rating >= 8) return 'rating-excellent';
@@ -41,46 +116,157 @@ function TeacherFeedbackSummary() {
     const getOverallPerformance = () => {
         if (!summary || !summary.topics.length) return null;
         const avgRating = summary.topics.reduce((sum, topic) => sum + topic.averageRating, 0) / summary.topics.length;
-        const totalResponses = summary.topics[0]?.ratingCount || 0;
+        const totalResponses = summary.topics.reduce((sum, topic) => sum + topic.ratingCount, 0);
         
         return { avgRating: avgRating.toFixed(1), totalResponses };
     };
 
+    const formatTimeAgo = (timestamp) => {
+        const seconds = Math.floor((new Date() - new Date(timestamp)) / 1000);
+        if (seconds < 60) return `${seconds}s ago`;
+        const minutes = Math.floor(seconds / 60);
+        if (minutes < 60) return `${minutes}m ago`;
+        const hours = Math.floor(minutes / 60);
+        return `${hours}h ago`;
+    };
+
     if (isLoading) return <div className="loading">📊 Loading feedback summary...</div>;
-    if (error) return <p className="error-message">{error}</p>;
+    if (error) return (
+        <div className="card">
+            <p className="error-message">{error}</p>
+            <Link to="/" style={{ 
+                display: 'inline-block', 
+                marginTop: '1rem',
+                padding: '0.8rem 1.5rem',
+                background: 'var(--primary-gradient)',
+                color: 'white',
+                borderRadius: '8px',
+                textDecoration: 'none',
+                fontWeight: '600'
+            }}>
+                🏠 Back to Home
+            </Link>
+        </div>
+    );
     if (!summary) return <p>📋 No summary data available.</p>;
 
     const performance = getOverallPerformance();
 
     return (
         <div className="card">
-            <h2>📈 Feedback Summary</h2>
-            <p style={{ fontSize: '1.1rem', color: 'var(--text-secondary)', marginBottom: '2rem' }}>
+            <h2>📈 Real-Time Feedback Dashboard</h2>
+            <p style={{ fontSize: '1.1rem', color: 'var(--text-secondary)', marginBottom: '1rem' }}>
                 Class: <span style={{ color: 'var(--primary-color)', fontWeight: '700' }}>{classId}</span>
             </p>
             
+            {/* Live Connection Status */}
+            <div style={{ 
+                display: 'flex', 
+                justifyContent: 'space-between', 
+                alignItems: 'center',
+                padding: '1rem',
+                background: 'rgba(67, 233, 123, 0.1)',
+                borderRadius: '8px',
+                marginBottom: '2rem',
+                border: '1px solid rgba(67, 233, 123, 0.3)'
+            }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <span style={{ color: '#43e97b', fontSize: '1.2rem' }}>🟢</span>
+                    <span style={{ fontWeight: '600' }}>Live Dashboard</span>
+                </div>
+                <div style={{ fontSize: '0.9rem', color: 'var(--text-secondary)' }}>
+                    👥 {connectedUsers.studentCount} students online • 👨‍🏫 {connectedUsers.teacherCount} teachers
+                </div>
+            </div>
+
+            {/* Real-time Statistics */}
             {performance && (
                 <div style={{ 
-                    background: 'var(--bg-input)', 
-                    padding: '2rem', 
-                    borderRadius: '12px', 
-                    marginBottom: '2rem',
                     display: 'grid',
-                    gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
-                    gap: '1.5rem',
-                    border: '1px solid var(--border-color)'
+                    gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+                    gap: '1rem',
+                    marginBottom: '2rem'
                 }}>
-                    <div style={{ textAlign: 'center' }}>
-                        <div style={{ fontSize: '2.5rem', fontWeight: '700', color: 'var(--primary-color)' }}>
+                    <div style={{ 
+                        background: 'var(--bg-input)', 
+                        padding: '1.5rem', 
+                        borderRadius: '12px',
+                        textAlign: 'center',
+                        border: '1px solid var(--border-color)'
+                    }}>
+                        <div style={{ fontSize: '2rem', fontWeight: '700', color: 'var(--primary-color)' }}>
                             {performance.avgRating}
                         </div>
-                        <div style={{ color: 'var(--text-secondary)' }}>Overall Average</div>
+                        <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>Overall Average</div>
                     </div>
-                    <div style={{ textAlign: 'center' }}>
-                        <div style={{ fontSize: '2.5rem', fontWeight: '700', color: 'var(--accent-color)' }}>
+                    <div style={{ 
+                        background: 'var(--bg-input)', 
+                        padding: '1.5rem', 
+                        borderRadius: '12px',
+                        textAlign: 'center',
+                        border: '1px solid var(--border-color)'
+                    }}>
+                        <div style={{ fontSize: '2rem', fontWeight: '700', color: 'var(--accent-color)' }}>
                             {performance.totalResponses}
                         </div>
-                        <div style={{ color: 'var(--text-secondary)' }}>Student Responses</div>
+                        <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>Total Ratings</div>
+                    </div>
+                    <div style={{ 
+                        background: 'var(--bg-input)', 
+                        padding: '1.5rem', 
+                        borderRadius: '12px',
+                        textAlign: 'center',
+                        border: '1px solid var(--border-color)'
+                    }}>
+                        <div style={{ fontSize: '2rem', fontWeight: '700', color: 'var(--success-color)' }}>
+                            {summary.generalComments.length}
+                        </div>
+                        <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>Comments</div>
+                    </div>
+                    <div style={{ 
+                        background: 'var(--bg-input)', 
+                        padding: '1.5rem', 
+                        borderRadius: '12px',
+                        textAlign: 'center',
+                        border: '1px solid var(--border-color)'
+                    }}>
+                        <div style={{ fontSize: '2rem', fontWeight: '700', color: 'var(--warning-color)' }}>
+                            {connectedUsers.studentCount}
+                        </div>
+                        <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>Live Students</div>
+                    </div>
+                </div>
+            )}
+
+            {/* Recent Activity */}
+            {recentActivity.length > 0 && (
+                <div style={{ marginBottom: '2rem' }}>
+                    <h3>🔔 Recent Activity</h3>
+                    <div style={{ 
+                        background: 'var(--bg-input)', 
+                        borderRadius: '12px', 
+                        border: '1px solid var(--border-color)',
+                        maxHeight: '200px',
+                        overflowY: 'auto'
+                    }}>
+                        {recentActivity.map(activity => (
+                            <div key={activity.id} style={{ 
+                                padding: '0.8rem 1rem',
+                                borderBottom: '1px solid var(--border-color)',
+                                fontSize: '0.9rem',
+                                display: 'flex',
+                                justifyContent: 'space-between',
+                                alignItems: 'center'
+                            }}>
+                                <span>{activity.message}</span>
+                                <span style={{ 
+                                    color: 'var(--text-muted)', 
+                                    fontSize: '0.8rem' 
+                                }}>
+                                    {formatTimeAgo(activity.timestamp)}
+                                </span>
+                            </div>
+                        ))}
                     </div>
                 </div>
             )}
@@ -136,6 +322,13 @@ function TeacherFeedbackSummary() {
                                 <div style={{ fontStyle: 'italic', lineHeight: '1.6' }}>
                                     "{item.text}"
                                 </div>
+                                <div style={{ 
+                                    fontSize: '0.8rem', 
+                                    color: 'var(--text-muted)', 
+                                    marginTop: '0.5rem' 
+                                }}>
+                                    {new Date(item.timestamp).toLocaleString()}
+                                </div>
                             </li>
                         ))}
                     </ul>
@@ -146,7 +339,7 @@ function TeacherFeedbackSummary() {
                         color: 'var(--text-muted)',
                         fontStyle: 'italic'
                     }}>
-                        No comments were provided by students.
+                        No comments were provided by students yet.
                     </div>
                 )}
             </div>
@@ -159,13 +352,50 @@ function TeacherFeedbackSummary() {
                 border: '1px solid rgba(67, 233, 123, 0.3)'
             }}>
                 <h4 style={{ margin: '0 0 1rem 0', color: 'var(--success-color)' }}>
-                    💡 Insights & Recommendations
+                    💡 Real-time Insights & Recommendations
                 </h4>
                 <ul style={{ margin: 0, paddingLeft: '1.5rem', color: 'var(--text-secondary)' }}>
-                    <li>Topics with ratings below 6 may need additional review</li>
-                    <li>High-performing topics can be used as examples for future classes</li>
-                    <li>Student comments provide valuable qualitative feedback</li>
+                    <li>⚡ Dashboard updates in real-time as students submit feedback</li>
+                    <li>📊 Topics with ratings below 6 may need additional review</li>
+                    <li>🎯 High-performing topics can be used as examples for future classes</li>
+                    <li>💬 Student comments provide valuable qualitative feedback</li>
+                    <li>👥 Monitor active student participation with live connection counts</li>
                 </ul>
+            </div>
+
+            <div style={{ 
+                display: 'flex', 
+                gap: '1rem', 
+                marginTop: '2rem',
+                flexWrap: 'wrap'
+            }}>
+                <Link to={`/setup/${classId}`} style={{ 
+                    flex: 1,
+                    padding: '1rem 1.5rem',
+                    background: 'var(--secondary-gradient)',
+                    color: 'white',
+                    borderRadius: '8px',
+                    textDecoration: 'none',
+                    fontWeight: '600',
+                    textAlign: 'center',
+                    minWidth: '200px'
+                }}>
+                    ⚙️ Update Session
+                </Link>
+                <Link to="/" style={{ 
+                    flex: 1,
+                    padding: '1rem 1.5rem',
+                    background: 'rgba(255, 255, 255, 0.1)',
+                    color: 'var(--text-primary)',
+                    borderRadius: '8px',
+                    textDecoration: 'none',
+                    fontWeight: '500',
+                    textAlign: 'center',
+                    border: '1px solid var(--border-color)',
+                    minWidth: '200px'
+                }}>
+                    🏠 Back to Home
+                </Link>
             </div>
         </div>
     );
