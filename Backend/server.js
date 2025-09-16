@@ -107,6 +107,20 @@ app.get('/api/feedback/:classId/summary', (req, res) => {
     res.status(200).json(summary);
 });
 
+// --- Add this code below all your API routes ---
+const path = require('path');
+
+// Serve static assets if in production
+if (process.env.NODE_ENV === 'production') {
+  // Set static folder
+  app.use(express.static('client/build'));
+
+  app.get('*', (req, res) => {
+    res.sendFile(path.resolve(__dirname, 'client', 'build', 'index.html'));
+  });
+}
+// --- End of code to add ---
+
 app.listen(PORT, () => {
     console.log(`Backend server is running successfully on http://localhost:${PORT}`);
 });
