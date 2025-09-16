@@ -2,6 +2,7 @@
 
 const express = require('express');
 const cors = require('cors');
+const path = require('path');
 const app = express();
 const PORT = process.env.PORT || 3001;
 
@@ -107,19 +108,21 @@ app.get('/api/feedback/:classId/summary', (req, res) => {
     res.status(200).json(summary);
 });
 
-// --- Add this code below all your API routes ---
-const path = require('path');
+// -----------DEPLOYMENT-----------
+if (process.env.NODE_ENV === "production") {
+  // The '..' tells it to go up one level from /Backend to the root
+  const buildPath = path.join(__dirname, "../client/build");
+  app.use(express.static(buildPath));
 
-// Serve static assets if in production
-if (process.env.NODE_ENV === 'production') {
-  // Set static folder
-  app.use(express.static('client/build'));
-
-  app.get('*', (req, res) => {
-    res.sendFile(path.resolve(__dirname, 'client', 'build', 'index.html'));
+  app.get("*", (req, res) => {
+    res.sendFile(path.join(buildPath, "index.html"));
+  });
+} else {
+  app.get("/", (req, res) => {
+    res.send("API is running..");
   });
 }
-// --- End of code to add ---
+// -----------DEPLOYMENT-----------
 
 // Use Render's port or default to 3001
 app.listen(PORT, () => {
