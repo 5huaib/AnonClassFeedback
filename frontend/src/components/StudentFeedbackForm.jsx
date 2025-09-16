@@ -15,7 +15,8 @@ function StudentFeedbackForm() {
     useEffect(() => {
         const fetchTopics = async () => {
             try {
-                const response = await axios.get(`http://localhost:3001/api/class/${classId}/topics`);
+                // ✅ FIXED: Using the production API URL
+                const response = await axios.get(`${process.env.REACT_APP_API_URL}/api/class/${classId}/topics`);
                 setTopics(response.data.topics);
             } catch (err) {
                 setError('Could not load topics. The teacher may not have set up this session yet.');
@@ -43,7 +44,8 @@ function StudentFeedbackForm() {
             return;
         }
         try {
-            await axios.post(`http://localhost:3001/api/feedback/${classId}`, { ratings: ratingsArray, generalComment });
+            // ✅ FIXED: Using the production API URL
+            await axios.post(`${process.env.REACT_APP_API_URL}/api/feedback/${classId}`, { ratings: ratingsArray, generalComment });
             setIsSubmitted(true);
         } catch (err) {
             setError('Failed to submit feedback.');
@@ -75,10 +77,10 @@ function StudentFeedbackForm() {
             <div className="success-message">
                 Your anonymous feedback has been submitted successfully! Your input helps make future classes even better.
             </div>
-            <div style={{ 
-                marginTop: '2rem', 
-                padding: '1.5rem', 
-                background: 'var(--bg-input)', 
+            <div style={{
+                marginTop: '2rem',
+                padding: '1.5rem',
+                background: 'var(--bg-input)',
                 borderRadius: '12px',
                 textAlign: 'center'
             }}>
@@ -95,10 +97,10 @@ function StudentFeedbackForm() {
             <p style={{ fontSize: '1.1rem', color: 'var(--text-secondary)', marginBottom: '2rem' }}>
                 Class: <span style={{ color: 'var(--primary-color)', fontWeight: '700' }}>{classId}</span>
             </p>
-            <div style={{ 
-                background: 'rgba(102, 126, 234, 0.1)', 
-                padding: '1.5rem', 
-                borderRadius: '12px', 
+            <div style={{
+                background: 'rgba(102, 126, 234, 0.1)',
+                padding: '1.5rem',
+                borderRadius: '12px',
                 marginBottom: '2rem',
                 border: '1px solid rgba(102, 126, 234, 0.3)'
             }}>
@@ -110,9 +112,9 @@ function StudentFeedbackForm() {
                 {topics.map(topic => (
                     <div className="form-group" key={topic.id}>
                         <label>📚 {topic.name}</label>
-                        <select 
-                            value={ratings[topic.id] || ''} 
-                            onChange={(e) => handleRatingChange(topic.id, e.target.value)} 
+                        <select
+                            value={ratings[topic.id] || ''}
+                            onChange={(e) => handleRatingChange(topic.id, e.target.value)}
                             required
                         >
                             <option value="" disabled>Choose your understanding level...</option>
@@ -126,9 +128,9 @@ function StudentFeedbackForm() {
                 ))}
                 <div className="form-group">
                     <label>💬 Additional Comments (Optional)</label>
-                    <textarea 
-                        value={generalComment} 
-                        onChange={(e) => setGeneralComment(e.target.value)} 
+                    <textarea
+                        value={generalComment}
+                        onChange={(e) => setGeneralComment(e.target.value)}
                         placeholder="Share any additional thoughts about today's class: What went well? What could be improved? Any suggestions?"
                         rows="4"
                     />
