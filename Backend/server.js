@@ -121,6 +121,7 @@ if (process.env.NODE_ENV === 'production') {
 }
 // --- End of code to add ---
 
+// Use Render's port or default to 3001
 app.listen(PORT, () => {
-    console.log(`Backend server is running successfully on http://localhost:${PORT}`);
+  console.log(`🚀 Backend server is running successfully on port ${PORT}`);
 });
