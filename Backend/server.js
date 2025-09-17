@@ -7,7 +7,7 @@ const { Pool } = require('pg');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
-const buildPath = path.join(__dirname, 'frontend');
+const buildPath = path.join(__dirname, 'frontend/dist');
 
 // Enable CORS and JSON parsing
 app.use(cors());
@@ -15,6 +15,12 @@ app.use(express.json());
 
 // Serve static files from the frontend build directory
 app.use(express.static(buildPath));
+
+// Log all requests for debugging
+app.use((req, res, next) => {
+    console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
+    next();
+});
 
 // PostgreSQL connection setup
 const pool = new Pool({
@@ -32,32 +38,48 @@ app.post('/api/class/:classId/setup', async (req, res) => {
     const { classId } = req.params;
     const { topics } = req.body;
 
+    console.log('Setting up class:', { classId, topics });
+
     if (!topics || !Array.isArray(topics) || topics.length === 0) {
+        console.log('Invalid topics array:', topics);
         return res.status(400).json({ error: 'An array of topics is required.' });
     }
 
     try {
+        console.log('Creating class session for:', classId);
+        // First, clear any existing topics for this class
+        await pool.query('DELETE FROM topics WHERE class_id = $1', [classId]);
+        
         // Create class session
-        await pool.query(
-          'INSERT INTO class_sessions (class_id, created_at) VALUES ($1, NOW()) ON CONFLICT (class_id) DO NOTHING',
+        const sessionResult = await pool.query(
+          'INSERT INTO class_sessions (class_id, created_at) VALUES ($1, NOW()) ON CONFLICT (class_id) DO UPDATE SET created_at = NOW() RETURNING *',
           [classId]
         );
+        console.log('Class session created/updated:', sessionResult.rows[0]);
+
         // Insert topics
         for (const name of topics) {
-          await pool.query(
-            'INSERT INTO topics (class_id, name) VALUES ($1, $2)',
+          const topicResult = await pool.query(
+            'INSERT INTO topics (class_id, name) VALUES ($1, $2) RETURNING *',
             [classId, name]
           );
+          console.log('Topic created:', topicResult.rows[0]);
         }
         res.status(201).json({ message: `Session for ${classId} created successfully.` });
     } catch (err) {
         console.error('Database error in /api/class/:classId/setup:', err);
         // Return error details in non-production for easier debugging
-        if (process.env.NODE_ENV !== 'production') {
-            res.status(500).json({ error: 'Database error.', details: err.message });
-        } else {
-            res.status(500).json({ error: 'Database error.' });
-        }
+        const errorResponse = {
+            error: 'Database error.',
+            message: err.message,
+            details: process.env.NODE_ENV !== 'production' ? {
+                code: err.code,
+                detail: err.detail,
+                where: err.where,
+                table: err.table,
+                constraint: err.constraint
+            } : undefined
+        };
     }
 });
 
@@ -142,28 +164,25 @@ app.get('/api/feedback/:classId/summary', (req, res) => {
     res.status(200).json(summary);
 });
 
-// -----------STATIC FILES & FRONTEND ROUTING-----------
-// Serve static files from frontend build
-const staticBuildPath = path.join(__dirname, "../frontend/dist");
-app.use(express.static(staticBuildPath));
-
 // -----------DEPLOYMENT-----------
 // Catch-all handler: serve React app for any non-API routes
 app.use((req, res) => {
   // Check if this is an API route - if so, don't serve the frontend
   if (req.path.startsWith('/api/')) {
+    console.log('API route not found:', req.path);
     return res.status(404).json({ error: 'API endpoint not found' });
   }
   
   // For all other routes, serve the React app
-  const fs = require('fs');
-  const indexPath = path.join(staticBuildPath, "index.html");
+  const indexPath = path.join(buildPath, "index.html");
+  console.log('Serving frontend from:', indexPath);
   
-  if (fs.existsSync(indexPath)) {
-    res.sendFile(indexPath);
-  } else {
-    res.status(404).send("Frontend not built. Please run 'npm run build' in the frontend directory.");
-  }
+  res.sendFile(indexPath, (err) => {
+    if (err) {
+      console.error('Error serving index.html:', err);
+      res.status(500).send('Error loading application. Please try again.');
+    }
+  });
 });
 
 // Export the app for Vercel serverless
