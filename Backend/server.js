@@ -38,6 +38,30 @@ pool.connect()
     console.error('Error connecting to PostgreSQL database:', err.message);
   });
 
+// Health check endpoint
+app.get('/api/health', async (req, res) => {
+  try {
+    const client = await pool.connect();
+    try {
+      const result = await client.query('SELECT NOW()');
+      res.status(200).json({
+        status: 'healthy',
+        database: 'connected',
+        timestamp: result.rows[0].now
+      });
+    } finally {
+      client.release();
+    }
+  } catch (err) {
+    console.error('Health check failed:', err);
+    res.status(500).json({
+      status: 'unhealthy',
+      database: 'disconnected',
+      error: err.message
+    });
+  }
+});
+
 // New In-Memory "Database"
 let feedbackSessions = {};
 
@@ -48,38 +72,81 @@ app.post('/api/class/:classId/setup', async (req, res) => {
     const { classId } = req.params;
     const { topics } = req.body;
 
-    console.log('Setting up class:', { classId, topics });
+    console.log('Request received for class setup:', { 
+        classId, 
+        topics,
+        headers: req.headers,
+        method: req.method,
+        path: req.path
+    });
 
-    if (!topics || !Array.isArray(topics) || topics.length === 0) {
-        console.log('Invalid topics array:', topics);
-        return res.status(400).json({ error: 'An array of topics is required.' });
+    // Validate classId
+    if (!classId || typeof classId !== 'string' || classId.trim().length === 0) {
+        console.log('Invalid classId:', classId);
+        return res.status(400).json({ error: 'A valid class ID is required.' });
+    }
+
+    // Validate topics
+    if (!topics || !Array.isArray(topics)) {
+        console.log('Invalid topics (not an array):', topics);
+        return res.status(400).json({ error: 'Topics must be an array.' });
+    }
+
+    if (topics.length === 0) {
+        console.log('Empty topics array');
+        return res.status(400).json({ error: 'At least one topic is required.' });
+    }
+
+    // Validate each topic
+    for (const topic of topics) {
+        if (typeof topic !== 'string' || topic.trim().length === 0) {
+            console.log('Invalid topic found:', topic);
+            return res.status(400).json({ error: 'Each topic must be a non-empty string.' });
+        }
     }
 
     try {
-        console.log('Creating class session for:', classId);
-        // First, clear any existing topics for this class
-        await pool.query('DELETE FROM topics WHERE class_id = $1', [classId]);
-        
-        // Create class session
-        const sessionResult = await pool.query(
-          'INSERT INTO class_sessions (class_id, created_at) VALUES ($1, NOW()) ON CONFLICT (class_id) DO UPDATE SET created_at = NOW() RETURNING *',
-          [classId]
-        );
-        console.log('Class session created/updated:', sessionResult.rows[0]);
+        // Start a transaction
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+            
+            console.log('Creating class session for:', classId);
+            // First, clear any existing topics for this class
+            await client.query('DELETE FROM topics WHERE class_id = $1', [classId]);
+            
+            // Create or update class session
+            const sessionResult = await client.query(
+                'INSERT INTO class_sessions (class_id, created_at) VALUES ($1, NOW()) ON CONFLICT (class_id) DO UPDATE SET created_at = NOW() RETURNING *',
+                [classId]
+            );
+            console.log('Class session created/updated:', sessionResult.rows[0]);
 
-        // Insert topics
-        const topicPromises = topics.map(name => 
-          pool.query(
-            'INSERT INTO topics (class_id, name) VALUES ($1, $2) RETURNING *',
-            [classId, name]
-          ).then(result => {
-            console.log('Topic created:', result.rows[0]);
-            return result.rows[0];
-          })
-        );
-        
-        await Promise.all(topicPromises);
-        res.status(201).json({ message: `Session for ${classId} created successfully.` });
+            // Insert topics sequentially within the transaction
+            const insertedTopics = [];
+            for (const topic of topics) {
+                const topicResult = await client.query(
+                    'INSERT INTO topics (class_id, name) VALUES ($1, $2) RETURNING *',
+                    [classId, topic.trim()]
+                );
+                console.log('Topic created:', topicResult.rows[0]);
+                insertedTopics.push(topicResult.rows[0]);
+            }
+
+            await client.query('COMMIT');
+            console.log('Transaction committed successfully');
+            
+            res.status(201).json({ 
+                message: `Session for ${classId} created successfully.`,
+                session: sessionResult.rows[0],
+                topics: insertedTopics
+            });
+        } catch (err) {
+            await client.query('ROLLBACK');
+            throw err; // Re-throw to be caught by outer catch
+        } finally {
+            client.release();
+        }
     } catch (err) {
         console.error('Database error in /api/class/:classId/setup:', err);
         // Return error details in non-production for easier debugging
