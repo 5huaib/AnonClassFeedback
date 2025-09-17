@@ -36,9 +36,10 @@ const { Pool } = require('pg');
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   max: 1, // Vercel has a limit of 1 concurrent connection per instance
-  ssl: process.env.NODE_ENV === 'production' ? {
-    rejectUnauthorized: false // Required for Supabase in production
-  } : false,
+  ssl: {
+    rejectUnauthorized: false,
+    sslmode: 'require'
+  },
   connectionTimeoutMillis: 5000, // 5 seconds
   idleTimeoutMillis: 10000, // 10 seconds
   allowExitOnIdle: true
@@ -231,14 +232,19 @@ app.post('/api/class/:classId/setup', async (req, res) => {
     }
 
     try {
-        // Start a transaction
+        console.log('Attempting to connect to database...');
         const client = await pool.connect();
+        console.log('Database connection established');
+        
         try {
+            console.log('Starting transaction...');
             await client.query('BEGIN');
             
             console.log('Creating class session for:', classId);
+            console.log('Clearing existing topics...');
             // First, clear any existing topics for this class
             await client.query('DELETE FROM topics WHERE class_id = $1', [classId]);
+            console.log('Existing topics cleared successfully');
             
             // Create or update class session
             const sessionResult = await client.query(
