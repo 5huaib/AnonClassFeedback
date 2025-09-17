@@ -132,7 +132,5 @@ app.use((req, res) => {
   }
 });
 
-// Use Render's port or default to 3001
-app.listen(PORT, () => {
-  console.log(`🚀 Backend server is running successfully on port ${PORT}`);
-});
+// Export the app for Vercel serverless
+module.exports = app;
