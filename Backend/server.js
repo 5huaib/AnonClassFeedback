@@ -111,15 +111,25 @@ app.get('/api/feedback/:classId/summary', (req, res) => {
 // -----------DEPLOYMENT-----------
 if (process.env.NODE_ENV === "production") {
   // The '..' tells it to go up one level from /Backend to the root
-  const buildPath = path.join(__dirname, "../client/build");
+  const buildPath = path.join(__dirname, "../frontend/dist");
   app.use(express.static(buildPath));
 
-  app.get("*", (req, res) => {
+  // Handle React Router - return index.html for all non-API routes
+  app.get(/^(?!\/api).*/, (req, res) => {
     res.sendFile(path.join(buildPath, "index.html"));
   });
 } else {
   app.get("/", (req, res) => {
-    res.send("API is running..");
+    res.json({ 
+      message: "🎓 AnonClassFeedback API is running!",
+      endpoints: {
+        setup: "POST /api/class/:classId/setup",
+        topics: "GET /api/class/:classId/topics", 
+        feedback: "POST /api/feedback/:classId",
+        summary: "GET /api/feedback/:classId/summary"
+      },
+      frontend: "http://localhost:5173"
+    });
   });
 }
 // -----------DEPLOYMENT-----------
