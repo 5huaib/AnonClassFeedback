@@ -28,6 +28,16 @@ const pool = new Pool({
   ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
 });
 
+// Test database connection
+pool.connect()
+  .then(client => {
+    console.log('Successfully connected to PostgreSQL database');
+    client.release();
+  })
+  .catch(err => {
+    console.error('Error connecting to PostgreSQL database:', err.message);
+  });
+
 // New In-Memory "Database"
 let feedbackSessions = {};
 
@@ -58,13 +68,17 @@ app.post('/api/class/:classId/setup', async (req, res) => {
         console.log('Class session created/updated:', sessionResult.rows[0]);
 
         // Insert topics
-        for (const name of topics) {
-          const topicResult = await pool.query(
+        const topicPromises = topics.map(name => 
+          pool.query(
             'INSERT INTO topics (class_id, name) VALUES ($1, $2) RETURNING *',
             [classId, name]
-          );
-          console.log('Topic created:', topicResult.rows[0]);
-        }
+          ).then(result => {
+            console.log('Topic created:', result.rows[0]);
+            return result.rows[0];
+          })
+        );
+        
+        await Promise.all(topicPromises);
         res.status(201).json({ message: `Session for ${classId} created successfully.` });
     } catch (err) {
         console.error('Database error in /api/class/:classId/setup:', err);
@@ -80,6 +94,7 @@ app.post('/api/class/:classId/setup', async (req, res) => {
                 constraint: err.constraint
             } : undefined
         };
+        res.status(500).json(errorResponse);
     }
 });
 
