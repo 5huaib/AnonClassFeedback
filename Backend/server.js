@@ -1,9 +1,82 @@
-// server.js
-
-const express = require('express');
-const cors = require('cors');
 const path = require('path');
+const express = require('express');
+
+// Global error handlers and process monitoring
+process.on('uncaughtException', (err) => {
+  console.error('UNCAUGHT EXCEPTION:', {
+    error: err.message,
+    stack: err.stack,
+    code: err.code,
+    time: new Date().toISOString()
+  });
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('UNHANDLED REJECTION:', {
+    reason: reason?.message || reason,
+    stack: reason?.stack,
+    time: new Date().toISOString()
+  });
+});
+
+// Log environment info on startup
+console.log('Server starting with environment:', {
+  nodeEnv: process.env.NODE_ENV,
+  hasDbUrl: !!process.env.DATABASE_URL,
+  hasVercelToken: !!process.env.VERCEL_AUTOMATION_BYPASS_SECRET,
+  platform: process.env.VERCEL ? 'vercel' : 'local',
+  region: process.env.VERCEL_REGION,
+  buildPath: path.join(__dirname, 'frontend/dist')
+});
+
+const cors = require('cors');
 const { Pool } = require('pg');
+
+// Configure database connection pool
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  max: 1, // Vercel has a limit of 1 concurrent connection per instance
+  ssl: process.env.NODE_ENV === 'production' ? {
+    rejectUnauthorized: false // Required for Supabase in production
+  } : false,
+  connectionTimeoutMillis: 5000, // 5 seconds
+  idleTimeoutMillis: 10000, // 10 seconds
+  allowExitOnIdle: true
+});
+
+// Add event handlers for the pool
+pool.on('error', (err) => {
+  console.error('Unexpected database pool error:', {
+    error: err.message,
+    code: err.code,
+    time: new Date().toISOString()
+  });
+});
+
+// Middleware to ensure database connection
+const ensureDbConnection = async (req, res, next) => {
+  if (!pool) {
+    console.error('Database pool not initialized');
+    return res.status(500).json({ error: 'Database configuration error' });
+  }
+
+  try {
+    const client = await pool.connect();
+    try {
+      await client.query('SELECT 1'); // Simple connection test
+      next();
+    } finally {
+      client.release();
+    }
+  } catch (error) {
+    console.error('Database connection failed:', {
+      error: error.message,
+      code: error.code,
+      time: new Date().toISOString()
+    });
+    res.status(500).json({ error: 'Database connection failed' });
+  }
+};
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -12,6 +85,9 @@ const buildPath = path.join(__dirname, 'frontend/dist');
 // Enable CORS and JSON parsing
 app.use(cors());
 app.use(express.json());
+
+// Use database connection middleware for all API routes
+app.use('/api', ensureDbConnection);
 
 // Serve static files from the frontend build directory
 app.use(express.static(buildPath));
@@ -22,42 +98,85 @@ app.use((req, res, next) => {
     next();
 });
 
-// PostgreSQL connection setup
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL, // Set this in Vercel env vars
-  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
+// Handle pool errors
+pool.on('error', (err, client) => {
+  console.error('Unexpected error on idle client', err);
+  process.exit(-1);
 });
 
-// Test database connection
-pool.connect()
-  .then(client => {
-    console.log('Successfully connected to PostgreSQL database');
-    client.release();
-  })
-  .catch(err => {
-    console.error('Error connecting to PostgreSQL database:', err.message);
-  });
+// Utility function to get database connection
+const getConnection = async () => {
+  const client = await pool.connect();
+  console.log('New database connection established');
+  
+  const query = async (sql, params = []) => {
+    try {
+      const start = Date.now();
+      const result = await client.query(sql, params);
+      const duration = Date.now() - start;
+      console.log('Executed query', { sql, duration, rows: result.rowCount });
+      return result;
+    } catch (error) {
+      console.error('Query error', { sql, error });
+      throw error;
+    }
+  };
 
-// Health check endpoint
+  return { client, query };
+};
+
+// Health check endpoint with detailed diagnostics
 app.get('/api/health', async (req, res) => {
+  console.log('Health check requested');
   try {
+    // Check bypass token
+    const token = req.query.bypassToken || req.headers['x-vercel-bypass'];
+    if (token !== process.env.VERCEL_AUTOMATION_BYPASS_SECRET) {
+      console.warn('Health check: Invalid bypass token');
+      return res.status(403).json({ error: 'Invalid bypass token' });
+    }
+
+    // Test database connection
     const client = await pool.connect();
     try {
-      const result = await client.query('SELECT NOW()');
-      res.status(200).json({
-        status: 'healthy',
-        database: 'connected',
-        timestamp: result.rows[0].now
+      const dbResult = await client.query('SELECT NOW()');
+      
+      // Return detailed health status
+      res.json({
+        status: 'ok',
+        time: new Date().toISOString(),
+        environment: {
+          nodeEnv: process.env.NODE_ENV,
+          platform: process.env.VERCEL ? 'vercel' : 'local',
+          region: process.env.VERCEL_REGION
+        },
+        database: {
+          connected: true,
+          timestamp: dbResult.rows[0].now
+        }
       });
     } finally {
       client.release();
     }
-  } catch (err) {
-    console.error('Health check failed:', err);
+  } catch (error) {
+    console.error('Health check failed:', {
+      error: error.message,
+      code: error.code,
+      stack: error.stack
+    });
+    
     res.status(500).json({
-      status: 'unhealthy',
-      database: 'disconnected',
-      error: err.message
+      status: 'error',
+      time: new Date().toISOString(),
+      error: {
+        message: error.message,
+        code: error.code
+      },
+      environment: {
+        nodeEnv: process.env.NODE_ENV,
+        platform: process.env.VERCEL ? 'vercel' : 'local',
+        region: process.env.VERCEL_REGION
+      }
     });
   }
 });
@@ -69,16 +188,22 @@ console.log("Backend server starting with topic-based feedback system...");
 
 // --- Endpoint for a teacher to SETUP a class with topics ---
 app.post('/api/class/:classId/setup', async (req, res) => {
-    const { classId } = req.params;
-    const { topics } = req.body;
-
-    console.log('Request received for class setup:', { 
-        classId, 
-        topics,
+    console.log('Class setup endpoint called');
+    
+    // Log request details
+    const requestInfo = {
+        classId: req.params.classId,
+        topics: req.body.topics,
         headers: req.headers,
         method: req.method,
-        path: req.path
-    });
+        path: req.path,
+        query: req.query,
+        timestamp: new Date().toISOString()
+    };
+    console.log('Setup request details:', requestInfo);
+
+    const { classId } = req.params;
+    const { topics } = req.body;
 
     // Validate classId
     if (!classId || typeof classId !== 'string' || classId.trim().length === 0) {
@@ -191,59 +316,105 @@ app.get('/api/class/:classId/topics', async (req, res) => {
 });
 
 // --- Endpoint for a student to SUBMIT feedback ---
-app.post('/api/feedback/:classId', (req, res) => {
+app.post('/api/feedback/:classId', async (req, res) => {
     const { classId } = req.params;
     const { ratings, generalComment } = req.body;
-    const session = feedbackSessions[classId];
 
-    if (!session) {
-        return res.status(404).json({ error: 'Class session not found.' });
-    }
+    // Validate input
     if (!ratings || !Array.isArray(ratings)) {
         return res.status(400).json({ error: 'An array of ratings is required.' });
     }
 
-    // Add each rating to the correct topic
-    ratings.forEach(rating => {
-        const topic = session.topics.find(t => t.id === rating.topicId);
-        if (topic && typeof rating.score === 'number' && rating.score >= 1 && rating.score <= 10) {
-            topic.ratings.push(rating.score);
+    try {
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+
+            // Check if class exists
+            const sessionResult = await client.query(
+                'SELECT * FROM class_sessions WHERE class_id = $1',
+                [classId]
+            );
+            if (sessionResult.rowCount === 0) {
+                return res.status(404).json({ error: 'Class session not found.' });
+            }
+
+            // Insert ratings
+            for (const rating of ratings) {
+                if (!rating.topicId || typeof rating.score !== 'number' || rating.score < 1 || rating.score > 10) {
+                    throw new Error('Invalid rating format');
+                }
+                await client.query(
+                    'INSERT INTO ratings (topic_id, score) VALUES ($1, $2)',
+                    [rating.topicId, rating.score]
+                );
+            }
+
+            // Insert general comment if provided
+            if (generalComment) {
+                await client.query(
+                    'INSERT INTO comments (class_id, text) VALUES ($1, $2)',
+                    [classId, generalComment]
+                );
+            }
+
+            await client.query('COMMIT');
+            res.status(201).json({ message: 'Feedback submitted successfully!' });
+        } catch (err) {
+            await client.query('ROLLBACK');
+            throw err;
+        } finally {
+            client.release();
         }
-    });
-
-    if (generalComment) {
-        session.generalComments.push({ text: generalComment, timestamp: new Date() });
+    } catch (err) {
+        console.error('Error submitting feedback:', err);
+        res.status(500).json({ 
+            error: 'Failed to submit feedback',
+            details: process.env.NODE_ENV === 'production' ? undefined : err.message
+        });
     }
-
-    res.status(201).json({ message: 'Feedback submitted successfully!' });
 });
 
 // --- Endpoint for a teacher to GET the feedback SUMMARY ---
-app.get('/api/feedback/:classId/summary', (req, res) => {
+app.get('/api/feedback/:classId/summary', async (req, res) => {
     const { classId } = req.params;
-    const session = feedbackSessions[classId];
 
-    if (!session) {
-        return res.status(404).json({ error: `No feedback found for class: ${classId}` });
-    }
+    try {
+        const client = await pool.connect();
+        try {
+            // Get topics with average ratings
+            const topicsResult = await client.query(`
+                SELECT 
+                    t.id,
+                    t.name,
+                    COALESCE(AVG(r.score)::numeric(10,2), 0) as average_rating,
+                    COUNT(r.id) as rating_count
+                FROM topics t
+                LEFT JOIN ratings r ON r.topic_id = t.id
+                WHERE t.class_id = $1
+                GROUP BY t.id, t.name
+            `, [classId]);
 
-    // --- New Aggregation Logic ---
-    const topicSummary = session.topics.map(topic => {
-        const ratingCount = topic.ratings.length;
-        if (ratingCount === 0) {
-            return { id: topic.id, name: topic.name, averageRating: 0, ratingCount: 0 };
+            // Get comments
+            const commentsResult = await client.query(
+                'SELECT text, created_at as timestamp FROM comments WHERE class_id = $1 ORDER BY created_at DESC',
+                [classId]
+            );
+
+            res.status(200).json({
+                topics: topicsResult.rows,
+                generalComments: commentsResult.rows
+            });
+        } finally {
+            client.release();
         }
-        const sum = topic.ratings.reduce((acc, curr) => acc + curr, 0);
-        const averageRating = parseFloat((sum / ratingCount).toFixed(2));
-        return { id: topic.id, name: topic.name, averageRating, ratingCount };
-    });
-
-    const summary = {
-        topics: topicSummary,
-        generalComments: session.generalComments
-    };
-    
-    res.status(200).json(summary);
+    } catch (err) {
+        console.error('Error getting feedback summary:', err);
+        res.status(500).json({ 
+            error: 'Failed to get feedback summary',
+            details: process.env.NODE_ENV === 'production' ? undefined : err.message
+        });
+    }
 });
 
 // -----------DEPLOYMENT-----------
@@ -265,6 +436,12 @@ app.use((req, res) => {
       res.status(500).send('Error loading application. Please try again.');
     }
   });
+});
+
+// Start the server
+const port = process.env.PORT || 3000;
+app.listen(port, () => {
+  console.log(`Server listening on port ${port}`);
 });
 
 // Export the app for Vercel serverless
