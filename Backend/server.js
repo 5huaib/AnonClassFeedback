@@ -108,21 +108,29 @@ app.get('/api/feedback/:classId/summary', (req, res) => {
     res.status(200).json(summary);
 });
 
-// -----------DEPLOYMENT-----------
-if (process.env.NODE_ENV === "production") {
-  // The '..' tells it to go up one level from /Backend to the root
-  const buildPath = path.join(__dirname, "../client/build");
-  app.use(express.static(buildPath));
+// -----------STATIC FILES & FRONTEND ROUTING-----------
+// Serve static files from frontend build
+const buildPath = path.join(__dirname, "../frontend/dist");
+app.use(express.static(buildPath));
 
-  app.get("*", (req, res) => {
-    res.sendFile(path.join(buildPath, "index.html"));
-  });
-} else {
-  app.get("/", (req, res) => {
-    res.send("API is running..");
-  });
-}
 // -----------DEPLOYMENT-----------
+// Catch-all handler: serve React app for any non-API routes
+app.use((req, res) => {
+  // Check if this is an API route - if so, don't serve the frontend
+  if (req.path.startsWith('/api/')) {
+    return res.status(404).json({ error: 'API endpoint not found' });
+  }
+  
+  // For all other routes, serve the React app
+  const fs = require('fs');
+  const indexPath = path.join(buildPath, "index.html");
+  
+  if (fs.existsSync(indexPath)) {
+    res.sendFile(indexPath);
+  } else {
+    res.status(404).send("Frontend not built. Please run 'npm run build' in the frontend directory.");
+  }
+});
 
 // Use Render's port or default to 3001
 app.listen(PORT, () => {
