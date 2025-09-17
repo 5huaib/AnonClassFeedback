@@ -290,6 +290,30 @@ button:disabled {
   transform: none;
 }
 
+.feature-card {
+  background: var(--bg-card);
+  padding: 2rem;
+  border-radius: 16px;
+  border: 1px solid var(--border-color);
+  box-shadow: var(--shadow-md);
+  backdrop-filter: blur(10px);
+  text-align: center;
+}
+
+.feature-card h3 {
+  color: var(--text-primary);
+  margin-bottom: 0.5rem;
+  font-size: 1.5rem;
+  font-weight: 700;
+}
+
+.feature-card p {
+  color: var(--text-secondary);
+  margin-bottom: 1rem;
+  font-size: 1rem;
+  line-height: 1.6;
+}
+
 .error-message {
   color: var(--error-color);
   background: rgba(255, 107, 107, 0.1);

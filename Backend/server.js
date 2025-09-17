@@ -110,11 +110,13 @@ app.get('/api/feedback/:classId/summary', (req, res) => {
 
 // -----------DEPLOYMENT-----------
 if (process.env.NODE_ENV === "production") {
-  // The '..' tells it to go up one level from /Backend to the root
-  const buildPath = path.join(__dirname, "../client/build");
+  // The '..' tells it to go up one level from /Backend to the root, then into frontend/dist
+  const buildPath = path.join(__dirname, "../frontend/dist");
   app.use(express.static(buildPath));
 
-  app.get("*", (req, res) => {
+  // Catch all handler: send back React's index.html file for any non-API routes
+  // Using regex to avoid conflicts with /api routes and fix Express v5 compatibility
+  app.get(/^(?!\/api).*$/, (req, res) => {
     res.sendFile(path.join(buildPath, "index.html"));
   });
 } else {
