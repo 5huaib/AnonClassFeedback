@@ -5,6 +5,20 @@ CREATE TABLE IF NOT EXISTS class_sessions (
 
 CREATE TABLE IF NOT EXISTS topics (
   id SERIAL PRIMARY KEY,
-  class_id TEXT REFERENCES class_sessions(class_id),
+  class_id TEXT REFERENCES class_sessions(class_id) ON DELETE CASCADE,
   name TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS ratings (
+  id SERIAL PRIMARY KEY,
+  topic_id INTEGER REFERENCES topics(id) ON DELETE CASCADE,
+  score INTEGER CHECK (score >= 1 AND score <= 10),
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS comments (
+  id SERIAL PRIMARY KEY,
+  class_id TEXT REFERENCES class_sessions(class_id) ON DELETE CASCADE,
+  text TEXT NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
