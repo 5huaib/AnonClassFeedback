@@ -18,7 +18,10 @@ function SetupClassForm() {
         }
 
         try {
-            await axios.post(`http://localhost:3001/api/class/${classId}/setup`, { topics: topicsArray });
+            await axios.post(
+                `https://anon-class-feedback-fjgff31a4-5huaibs-projects.vercel.app/api/class/${classId}/setup?x-vercel-set-bypass-cookie=true&x-vercel-protection-bypass=aB3dE5gH7jK9LmN1pQ2rS4tU6wX8yZ0q`,
+                { topics: topicsArray }
+            );
             setIsSubmitted(true);
         } catch (err) {
             setError('Failed to set up the class. Please try again.');
