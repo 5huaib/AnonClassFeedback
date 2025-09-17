@@ -1,6 +1,7 @@
 // src/App.jsx
 import React from 'react';
 import { Routes, Route } from 'react-router-dom';
+import Home from './components/Home';
 import StudentFeedbackForm from './components/StudentFeedbackForm';
 import TeacherFeedbackSummary from './components/TeacherFeedbackSummary';
 import SetupClassForm from './components/SetupClassForm';
@@ -13,6 +14,7 @@ function App() {
         ✨ Transform your classroom with anonymous, topic-based feedback that empowers students and enhances teaching excellence.
       </p>
       <Routes>
+        <Route path="/" element={<Home />} />
         <Route path="/setup/:classId" element={<SetupClassForm />} />
         <Route path="/feedback/:classId" element={<StudentFeedbackForm />} />
         <Route path="/teacher/:classId" element={<TeacherFeedbackSummary />} />
